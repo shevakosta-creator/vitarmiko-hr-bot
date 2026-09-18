@@ -1,6 +1,8 @@
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
 from docx import Document
+from docx.shared import Pt
+from docx.oxml.ns import qn
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import os
@@ -13,13 +15,14 @@ OUTPUT_DIR = "output"
  ASK_ZANYATOST, ASK_STAVKA,
  ASK_FIO, ASK_BIRTH, ASK_PASSPORT_SERIES, ASK_PASSPORT_NUMBER, ASK_PASSPORT_ISSUED,
  ASK_ADDRESS_REG, ASK_ADDRESS_LIVE, ASK_SALARY, ASK_START_DATE, ASK_CONTRACT_TERM,
- ASK_UNIVERSITY, ASK_STUDY_END) = range(18)
+ ASK_UNIVERSITY, ASK_STUDY_END, ASK_CAR_BRAND, ASK_CAR_PLATE, ASK_CAR_COMPENSATION) = range(21)
 
 OBYAZANNOSTI = {
     "директор": "— Руководство деятельностью Общества.\n— Подписание договоров и финансовых документов.\n— Утверждение штатного расписания.\n— Издание приказов и распоряжений.",
     "заместитель директора по экономике и финансам": "— Сведение и анализ инвентаризаций.\n— Работа с поставщиками.\n— Бюджетирование и управление себестоимостью.\n— Подготовка финансовой отчётности.",
     "заместитель директора по производству": "— Хозяйственная часть.\n— Поиск и подбор персонала.\n— Координация работы отделов, водителей, управляющих.\n— Контроль стандартов.",
     "экономист по маркетингу и кадровой работе": "— Кадровое делопроизводство.\n— Маркетинг (продвижение, соцсети, акции).\n— Сбор данных для бухгалтерии.",
+    "экономист": "— Экономический анализ деятельности предприятия.\n— Планирование и контроль финансовых показателей.\n— Подготовка аналитических отчётов.\n— Участие в бюджетировании и ценообразовании.",
     "специалист по стандартам и обучению": "— Разработка стандартов работы.\n— Обучение и аттестация персонала.\n— Контроль соблюдения стандартов.",
     "управляющий отдела": "— Приготовление блюд, контроль качества.\n— Управление отделом.\n— Заказ сырья, работа с поставщиками.\n— Инвентаризации, отчётность.",
     "повар-наставник": "— Обучение стажёров и сотрудников.\n— Контроль соблюдения техкарт.\n— Проведение аттестаций.\n— Участие в инвентаризациях.",
@@ -41,11 +44,42 @@ MAT_OTVETSTVENNOST = {
     "старший кассир": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
     "кассир-администратор": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
     "кассир": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
-    "водитель автомобиля": "6.2. Работник несет полную индивидуальную материальную ответственность за автомобиль и груз.",
+    "водитель автомобиля": "6.2. Работник несет полную индивидуальную материальную ответственность за вверенный автомобиль и перевозимый груз.",
 }
 
 PERECHEN_115 = ["повар 3 разряда", "старший повар", "повар-наставник", "водитель автомобиля"]
 DOLZHNOSTI_LIST = "\n".join([f"• {d}" for d in OBYAZANNOSTI.keys()])
+
+def set_docx_font(doc, font_name='Times New Roman', font_size=13):
+    """Устанавливает шрифт Times New Roman 13 для всего документа"""
+    for paragraph in doc.paragraphs:
+        for run in paragraph.runs:
+            run.font.name = font_name
+            run.font.size = Pt(font_size)
+            rpr = run._element.get_or_add_rPr()
+            rfonts = rpr.find(qn('w:rFonts'))
+            if rfonts is None:
+                rfonts = rpr.makeelement(qn('w:rFonts'), {})
+                rpr.append(rfonts)
+            rfonts.set(qn('w:eastAsia'), font_name)
+            rfonts.set(qn('w:ascii'), font_name)
+            rfonts.set(qn('w:hAnsi'), font_name)
+    
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name = font_name
+                        run.font.size = Pt(font_size)
+                        rpr = run._element.get_or_add_rPr()
+                        rfonts = rpr.find(qn('w:rFonts'))
+                        if rfonts is None:
+                            rfonts = rpr.makeelement(qn('w:rFonts'), {})
+                            rpr.append(rfonts)
+                        rfonts.set(qn('w:eastAsia'), font_name)
+                        rfonts.set(qn('w:ascii'), font_name)
+                        rfonts.set(qn('w:hAnsi'), font_name)
 
 def get_template_name(context):
     cit = context.user_data.get('citizenship', 'РБ')
@@ -192,6 +226,12 @@ async def ask_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['start_date'] = update.message.text.strip()
+    
+    # Если должность "водитель автомобиля" — спрашиваем про автомобиль
+    if context.user_data.get('position') == 'водитель автомобиля':
+        await update.message.reply_text("🚗 Водитель использует личный автомобиль?\n1️⃣ Да\n2️⃣ Нет")
+        return ASK_CAR_BRAND
+    
     cit = context.user_data.get('citizenship', 'РБ')
     pos = context.user_data.get('position', '')
     if cit not in ['РБ', 'ЕАЭС'] and pos in PERECHEN_115:
@@ -201,6 +241,34 @@ async def ask_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📅 Срок контракта в годах (1, 2, 3, 5 или 1.5):")
         return ASK_CONTRACT_TERM
     return await generate_doc(update, context)
+
+async def ask_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ans = update.message.text.strip().lower()
+    if ans in ['1', 'да']:
+        context.user_data['car_use'] = True
+        await update.message.reply_text("🚗 Марка и модель автомобиля:")
+        return ASK_CAR_PLATE
+    else:
+        context.user_data['car_use'] = False
+        cit = context.user_data.get('citizenship', 'РБ')
+        pos = context.user_data.get('position', '')
+        if cit not in ['РБ', 'ЕАЭС'] and pos in PERECHEN_115:
+            context.user_data['end_date'] = f"31.12.{date.today().year}"
+            return await generate_doc(update, context)
+        elif context.user_data.get('type') == 'contract':
+            await update.message.reply_text("📅 Срок контракта в годах (1, 2, 3, 5 или 1.5):")
+            return ASK_CONTRACT_TERM
+        return await generate_doc(update, context)
+
+async def ask_car_plate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['car_brand'] = update.message.text.strip()
+    await update.message.reply_text("🚗 Госномер автомобиля:")
+    return ASK_CAR_COMPENSATION
+
+async def ask_car_compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['car_plate'] = update.message.text.strip()
+    await update.message.reply_text("💰 Ежемесячная компенсация за использование авто (BYN):")
+    return ASK_CAR_COMPENSATION
 
 async def ask_contract_term(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().replace(',', '.')
@@ -237,6 +305,17 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     end_date = get_end_date(context)
     mat_block = MAT_OTVETSTVENNOST.get(u.get('position', ''), '')
+    
+    # Блок компенсации за автомобиль для водителя
+    car_block = ""
+    if u.get('position') == 'водитель автомобиля' and u.get('car_use'):
+        car_block = f"""
+6. КОМПЕНСАЦИЯ ЗА ИСПОЛЬЗОВАНИЕ ЛИЧНОГО АВТОМОБИЛЯ
+6.1. Работник использует в служебных целях принадлежащий ему на праве собственности автомобиль {u.get('car_brand', '')}, государственный регистрационный знак {u.get('car_plate', '')}.
+6.2. Наниматель выплачивает Работнику компенсацию за использование, износ (амортизацию) личного автомобиля в размере {u.get('car_compensation', '')} белорусских рублей в месяц.
+6.3. Дополнительно Наниматель возмещает Работнику расходы на горюче-смазочные материалы на основании подтверждающих документов.
+6.4. Компенсация выплачивается одновременно с заработной платой за вторую половину месяца.
+"""
 
     replacements = {
         '{{gorod}}': 'г. Витебск',
@@ -256,6 +335,7 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '{{obyazannosti}}': OBYAZANNOSTI.get(u.get('position', ''), ''),
         '{{oklad}}': u.get('salary', ''),
         '{{blok_mat_otvetstvennost}}': mat_block,
+        '{{blok_kompensacia_avto}}': car_block,
         '{{FIO_rabotnika_imen}}': fio_imen,
         '{{FIO_rabotnika_fam}}': fam,
         '{{data_okonchania}}': end_date,
@@ -278,6 +358,9 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for key, val in replacements.items():
                         if key in p.text:
                             p.text = p.text.replace(key, val)
+
+    # Применяем шрифт Times New Roman 13
+    set_docx_font(doc, 'Times New Roman', 13)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filepath = os.path.join(OUTPUT_DIR, f"dogovor_{fam}.docx")
@@ -313,6 +396,9 @@ if __name__ == '__main__':
             ASK_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_salary)],
             ASK_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_start_date)],
             ASK_CONTRACT_TERM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_contract_term)],
+            ASK_CAR_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_brand)],
+            ASK_CAR_PLATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_plate)],
+            ASK_CAR_COMPENSATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_compensation)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
