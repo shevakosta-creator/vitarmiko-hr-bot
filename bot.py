@@ -15,7 +15,7 @@ OUTPUT_DIR = "output"
  ASK_ZANYATOST, ASK_STAVKA,
  ASK_FIO, ASK_BIRTH, ASK_PASSPORT_SERIES, ASK_PASSPORT_NUMBER, ASK_PASSPORT_ISSUED,
  ASK_ADDRESS_REG, ASK_ADDRESS_LIVE, ASK_SALARY, ASK_START_DATE, ASK_CONTRACT_TERM,
- ASK_UNIVERSITY, ASK_STUDY_END, ASK_CAR_BRAND, ASK_CAR_PLATE, ASK_CAR_COMPENSATION) = range(21)
+ ASK_UNIVERSITY, ASK_STUDY_END, ASK_CAR_USE, ASK_CAR_BRAND, ASK_CAR_PLATE, ASK_CAR_COMPENSATION) = range(22)
 
 OBYAZANNOSTI = {
     "директор": "— Руководство деятельностью Общества.\n— Подписание договоров и финансовых документов.\n— Утверждение штатного расписания.\n— Издание приказов и распоряжений.",
@@ -44,7 +44,7 @@ MAT_OTVETSTVENNOST = {
     "старший кассир": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
     "кассир-администратор": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
     "кассир": "6.2. Работник несет полную индивидуальную материальную ответственность за денежные средства и ТМЦ.",
-    "водитель автомобиля": "6.2. Работник несет полную индивидуальную материальную ответственность за вверенный автомобиль и перевозимый груз.",
+    "водитель автомобиля": "7.2. Работник несет полную индивидуальную материальную ответственность за вверенный автомобиль и перевозимый груз.",
 }
 
 PERECHEN_115 = ["повар 3 разряда", "старший повар", "повар-наставник", "водитель автомобиля"]
@@ -86,6 +86,11 @@ def get_template_name(context):
     typ = context.user_data.get('type', 'bessrochny')
     student = context.user_data.get('student', False)
     pos = context.user_data.get('position', '')
+    car_use = context.user_data.get('car_use', False)
+    
+    if pos == 'водитель автомобиля' and car_use:
+        return "template_driver.docx"
+    
     if student:
         return "template_student.docx"
     elif cit in ['РБ', 'ЕАЭС']:
@@ -227,10 +232,9 @@ async def ask_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['start_date'] = update.message.text.strip()
     
-    # Если должность "водитель автомобиля" — спрашиваем про автомобиль
     if context.user_data.get('position') == 'водитель автомобиля':
-        await update.message.reply_text("🚗 Водитель использует личный автомобиль?\n1️⃣ Да\n2️⃣ Нет")
-        return ASK_CAR_BRAND
+        await update.message.reply_text("🚗 Использует ли водитель личный автомобиль?\n1️⃣ Да\n2️⃣ Нет")
+        return ASK_CAR_USE
     
     cit = context.user_data.get('citizenship', 'РБ')
     pos = context.user_data.get('position', '')
@@ -242,12 +246,12 @@ async def ask_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_CONTRACT_TERM
     return await generate_doc(update, context)
 
-async def ask_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ans = update.message.text.strip().lower()
-    if ans in ['1', 'да']:
+async def ask_car_use(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip().lower()
+    if text in ['1', 'да']:
         context.user_data['car_use'] = True
         await update.message.reply_text("🚗 Марка и модель автомобиля:")
-        return ASK_CAR_PLATE
+        return ASK_CAR_BRAND
     else:
         context.user_data['car_use'] = False
         cit = context.user_data.get('citizenship', 'РБ')
@@ -260,15 +264,27 @@ async def ask_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ASK_CONTRACT_TERM
         return await generate_doc(update, context)
 
-async def ask_car_plate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['car_brand'] = update.message.text.strip()
-    await update.message.reply_text("🚗 Госномер автомобиля:")
+    await update.message.reply_text("🚗 Государственный регистрационный знак:")
+    return ASK_CAR_PLATE
+
+async def ask_car_plate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['car_plate'] = update.message.text.strip()
+    await update.message.reply_text("💰 Компенсация за использование авто (BYN в месяц):")
     return ASK_CAR_COMPENSATION
 
 async def ask_car_compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['car_plate'] = update.message.text.strip()
-    await update.message.reply_text("💰 Ежемесячная компенсация за использование авто (BYN):")
-    return ASK_CAR_COMPENSATION
+    context.user_data['car_compensation'] = update.message.text.strip()
+    cit = context.user_data.get('citizenship', 'РБ')
+    pos = context.user_data.get('position', '')
+    if cit not in ['РБ', 'ЕАЭС'] and pos in PERECHEN_115:
+        context.user_data['end_date'] = f"31.12.{date.today().year}"
+        return await generate_doc(update, context)
+    elif context.user_data.get('type') == 'contract':
+        await update.message.reply_text("📅 Срок контракта в годах (1, 2, 3, 5 или 1.5):")
+        return ASK_CONTRACT_TERM
+    return await generate_doc(update, context)
 
 async def ask_contract_term(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().replace(',', '.')
@@ -305,17 +321,6 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     end_date = get_end_date(context)
     mat_block = MAT_OTVETSTVENNOST.get(u.get('position', ''), '')
-    
-    # Блок компенсации за автомобиль для водителя
-    car_block = ""
-    if u.get('position') == 'водитель автомобиля' and u.get('car_use'):
-        car_block = f"""
-6. КОМПЕНСАЦИЯ ЗА ИСПОЛЬЗОВАНИЕ ЛИЧНОГО АВТОМОБИЛЯ
-6.1. Работник использует в служебных целях принадлежащий ему на праве собственности автомобиль {u.get('car_brand', '')}, государственный регистрационный знак {u.get('car_plate', '')}.
-6.2. Наниматель выплачивает Работнику компенсацию за использование, износ (амортизацию) личного автомобиля в размере {u.get('car_compensation', '')} белорусских рублей в месяц.
-6.3. Дополнительно Наниматель возмещает Работнику расходы на горюче-смазочные материалы на основании подтверждающих документов.
-6.4. Компенсация выплачивается одновременно с заработной платой за вторую половину месяца.
-"""
 
     replacements = {
         '{{gorod}}': 'г. Витебск',
@@ -335,7 +340,6 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '{{obyazannosti}}': OBYAZANNOSTI.get(u.get('position', ''), ''),
         '{{oklad}}': u.get('salary', ''),
         '{{blok_mat_otvetstvennost}}': mat_block,
-        '{{blok_kompensacia_avto}}': car_block,
         '{{FIO_rabotnika_imen}}': fio_imen,
         '{{FIO_rabotnika_fam}}': fam,
         '{{data_okonchania}}': end_date,
@@ -344,6 +348,9 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '{{study_end}}': u.get('study_end', ''),
         '{{tip_zanyatosti}}': u.get('zanyatost', 'по основному месту работы'),
         '{{stavka}}': u.get('stavka', '1.0 (полная)'),
+        '{{car_brand}}': u.get('car_brand', ''),
+        '{{car_plate}}': u.get('car_plate', ''),
+        '{{car_compensation}}': u.get('car_compensation', ''),
     }
 
     for p in doc.paragraphs:
@@ -359,7 +366,6 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if key in p.text:
                             p.text = p.text.replace(key, val)
 
-    # Применяем шрифт Times New Roman 13
     set_docx_font(doc, 'Times New Roman', 13)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -396,6 +402,7 @@ if __name__ == '__main__':
             ASK_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_salary)],
             ASK_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_start_date)],
             ASK_CONTRACT_TERM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_contract_term)],
+            ASK_CAR_USE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_use)],
             ASK_CAR_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_brand)],
             ASK_CAR_PLATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_plate)],
             ASK_CAR_COMPENSATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_car_compensation)],
